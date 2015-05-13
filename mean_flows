@@ -1,0 +1,149 @@
+## LAST UPDATED: 2015-05-08
+## Description: script to obtain daily and monthly average flows in cms for gauging stations
+## Input: station.csv (time stamps could be Event, Hourly or Daily)
+## Output: station_daily.txt; station_monthly.txt
+
+# 1. Defining working directory and destination paths
+WD<- getwd()
+if (!is.null(WD))
+  setwd(WD)
+
+# 2. Reading the .csv file 
+require(tcltk)
+fileName<- tclvalue(tkgetOpenFile())
+input<- read.csv(file=fileName, skip=2, header=FALSE, sep="\t") # sep="," for MRC
+
+# 3. Defining the type of interval. Options are: "E"vent, "H"ourly, or "D"aily 
+interval<- "E"  #############################################################################INPUTS 
+station<- "MST" #############################################################################INPUTS
+
+# 4. Defining columns of interest and creating the local table accordingly
+if(interval == "E")  {columns=c(1,2,3); Col.Titles = c("Date", "Time", "Flow_cfs")
+                      day.points=96}
+if(interval == "H")  {columns=c(1,2,3); Col.Titles = c("Date", "Time", "Flow_cfs")
+                      day.points=24}
+if(interval == "D")  {columns=c(1,3); Col.Titles = c("Date", "Flow_cfs")
+                      day.points=1}
+table1<- data.frame()
+table1<- input[columns]
+colnames(table1)<- Col.Titles
+
+# 5. Replacing with NAs unwanted values from the Flow_cfs column (-9998, -9997 and m)
+  #obtaining the index positions of all the values to be replaced with NAs
+  a<- which(table1$Flow_cfs == -9998)
+  b<- which(table1$Flow_cfs == -9997)
+  c<- which(table1$Flow_cfs == "m")
+  d<- sort(c(a,b,c))
+
+  table1$Flow_cfs[d]<- NA
+
+# 6. Generating the daily averages for the case of Event and Hourly files
+table4<- data.frame()
+
+if(interval == "D") {table4 = table1; table4$flow_cfs = as.numeric(as.vector(table4$Flow_cfs))
+                     } else {
+
+  Dates<- unique(table1[1])
+  table2<- data.frame()
+  Date<- array(); flow_cfs<- array()
+  table3<- data.frame()
+
+  for (i in 1:length(Dates[[1]])){
+    table2 = subset(table1, table1[1]==Dates[[1]][i])
+    Date[i] = table2$Date[1]
+    total.count = length(table2$Date)
+    index = is.na(table2$Flow_cfs)
+    count = length(which(index == TRUE))
+    na_per = count*100/total.count
+    table3 = na.omit(table2)  
+    if(na_per != 100) {flow_cfs[i] = mean(as.numeric(as.vector((table3$Flow_cfs))))} else
+        {flow_cfs[i] = NA}
+  }
+  table4<- cbind(Date,flow_cfs)
+}
+
+# 7. Replacing NA's with interpolated values (I'm going to interpolate using the upper and lower bounds of NA's)
+
+table5<- as.data.frame(table4)
+  
+  daily<- list()
+  # obtaining an actual Date format
+    daily$Date<- strptime(table5$Date, "%Y%m%d")
+  # the time stamp for the data set (24=1day)
+    daily$interval.hours<- diff(daily$Date)
+    daily$interval.days<- round(daily$interval.hours/24, digits = 0)
+    interval<- c(0, daily$interval.days)
+  # adding to table5 the number of days between two consecutive time stamps (ideally 1)  
+    table5$interval<- interval
+
+# checking if table5$flow_cfs has NA's
+  check.na<- is.na(as.array(table5$flow_cfs))
+  unique(check.na) 
+  stop("MESSAGE: if no -TRUEs-, continue in line 117 - Calculating flow in cms")
+
+
+
+
+
+# Identifying locations of NA's within the flow_cfs column of table5
+  index <- which(check.na == TRUE) #TRUE indicates NA's  
+  if (index[1] == 1){stop("First value of table5$flow_cfs needs to be different from NA - replace table5$flow_cfs[1] with an estimated value")}
+      # example: table5$flow_cfs[1]<- 2700 # the case for station MBB
+      # after redefining table5$flow_cfs[1], index needs to be estimated again
+      # index <- which(is.na(table5$flow_cfs) == TRUE)
+
+  # Grouping indexes by consecutive numbers
+    #Resource: http://r.789695.n4.nabble.com/Efficient-way-to-find-consecutive-integers-in-vector-td843506.html
+     #I still need to fully understand the use of function(i) within groups
+    breaks<- c(0, which(diff(index) != 1), length(index))
+    groups<- sapply(seq(length(breaks)-1), function(i) index[(breaks[i]+1):breaks[i+1]])
+
+# Interpolating where required according to "groups" 
+
+  for (i in 1:length(groups)){
+      hi<- max(groups[[i]])+1
+      lo<- min(groups[[i]])-1
+      pos<- seq((lo+1), (hi-1), by = 1)
+      flow.hi<- table5$flow_cfs[hi]
+      flow.lo<- table5$flow_cfs[lo]
+      difference<- flow.hi-flow.lo
+      days<- sum(table5$interval[(lo+1):hi])
+      diff<- difference/days
+      for (j in min(pos):max(pos)){
+        table5$flow_cfs[j]<- table5$flow_cfs[j-1] + (table5$interval[j]*diff) 
+      }
+    }
+
+# Calculating flow in cms
+table5$flow_cms<- table5$flow_cfs*0.028316847
+
+
+# 8. Printing final file of daily averages
+part1<- paste(station, "_meanDaily", sep="")
+file.name<- paste(part1, ".txt", sep= "")
+
+write.table(table5, file = file.name, append = FALSE, quote = FALSE, sep = "\t",
+            na = "NA", dec = ".", row.names = FALSE, col.names = TRUE )
+
+# 9. Calculating monthly averages
+table5$yearmonth<- substr(table5$Date, 1, 6)
+year.month<- unique(table5$yearmonth)
+
+table6<- data.frame()
+YearMonth<- array(); flow_cms<- array()
+
+for (i in 1:length(year.month)){
+  monthly<- subset(table5, table5$yearmonth == year.month[i])
+  YearMonth[i]<- unique(monthly$yearmonth)
+  flow_cms[i]<- mean(monthly$flow_cms)
+}
+
+table6<- cbind(YearMonth, flow_cms)
+
+# 10. Printing the monthly average file
+part2<- paste(station, "_meanMonthly", sep="")
+file.name2<- paste(part2, ".txt", sep= "")
+
+write.table(table6, file = file.name2, append = FALSE, quote = FALSE, sep = "\t",
+            na = "NA", dec = ".", row.names = FALSE, col.names = TRUE )
+
